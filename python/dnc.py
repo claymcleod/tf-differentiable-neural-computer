@@ -12,11 +12,13 @@ class DNC(object):
     """
     
     def __init__(self, X, y, validation_split=0.25, N=256, W=64, R=2, n_hidden=512, batch_size=1,
-                disable_memory=False, dtype=tf.float64, summary_dir=None):
+                disable_memory=False, dtype=tf.float32, summary_dir=None):
 
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=validation_split)
         
-                # DNC settings #
+        ################
+        # DNC settings #
+        ################
 
         self.X_train = X_train
         self.y_train = y_train
@@ -32,7 +34,9 @@ class DNC(object):
         self.summary_dir = summary_dir
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
                 
+        #######################
         # Controller settings #
+        #######################
 
         (self.n_train_instances, self.n_timesteps, self.n_env_inputs) = self.X_train.shape
         (self.n_test_instances, _, _) = self.X_test.shape
@@ -40,7 +44,9 @@ class DNC(object):
         self.n_read_inputs = self.W*self.R
         self.n_interface_outputs = (self.W*self.R) + 3*self.W + 5*self.R + 3
         
+        #######################
         # Tensorflow settings #
+        #######################
 
         self.var_factory = VariableFactory(dtype)
         self.session = tf.Session(config=tf.ConfigProto(inter_op_parallelism_threads=1,
@@ -49,6 +55,7 @@ class DNC(object):
         self.compile() 
         
     def reset_memory_state(self):
+        """Reset the memory state after each training iteration"""
         
         # Just for convenience
         N = self.N
@@ -239,12 +246,25 @@ class DNC(object):
                 
                 # (3) get allocation weightings
                 with tf.variable_scope("allocation_weightings"):
-                    phi = tf_argsort(self.usage_vector)[0]
+                    if self.dtype == tf.float32:
+                        phi = tf.cast(tf_argsort(self.usage_vector)[0], tf.int32)
+                    else:
+                        phi = tf.cast(tf_argsort(self.usage_vector)[0], tf.int64)
+                        
                     allocation_vector_list = []
                     for j in range(self.N):
                         part1 = (1 - tf.slice(self.usage_vector, [phi[j]], [1]))
-                        part2 = tf.reduce_prod(tf.cast(tf.pack([tf.slice(self.usage_vector, [phi[i]], [1]) for i in range(j-1)]), self.dtype), reduction_indices=[0])
-                        val = part1 + part2
+                        others = []
+                        for i in range(j-1):
+                            var = tf.slice(self.usage_vector, [phi[i]], [1])
+                            others.append(var)
+
+                        if len(others) == 0:
+                            part2 = tf.constant(0, dtype=self.dtype)
+                        else:
+                            part2 = tf.pack(tf.squeeze(others))
+                        part3 = tf.reduce_prod(part2)
+                        val = part1 + part3
                         allocation_vector_list.append(val)
                     
                     allocation_vector = tf.squeeze(tf.pack(allocation_vector_list))
@@ -342,6 +362,8 @@ class DNC(object):
                 print("\rIteration {}: {} {}/{} ({:.2f}%) Loss: {:.5f}".format(n_iter+1, progress_bar, 
                     i, self.n_train_instances, percent*100.0, loss), end="")
                 i += self.batch_size
+
+                self.reset_memory_state()
 
             ##############################
             # Assess at the end of batch #
