@@ -1,5 +1,5 @@
-import tensorflow as tf
 import numpy as np
+import tensorflow as tf
 
 def sigmoid(x):
     return 1 / (1 + tf.exp(-x))
@@ -57,3 +57,38 @@ class VariableFactory(object):
 
     def random(self, name, shape, **kwargs):
         return tf.get_variable(name, shape=shape, dtype=self.dtype, initializer=tf.random_normal_initializer(), **kwargs)
+
+
+class GradientToolkit(object):
+
+    def __init__(self, optimizer_fn, loss_fn):
+
+        self.optimizer_fn = optimizer_fn
+        self.loss_fn = loss_fn
+        grads_and_vars = optimizer_fn.compute_gradients(loss_fn)
+        self.filtered_grads_and_vars = []
+        self.filtered_vars = []
+
+        warn = False
+        for (grad, var) in grads_and_vars:
+            if var is None or grad is None:
+                warn = True
+                print(var.name, "=", grad)
+            else:
+                self.filtered_grads_and_vars.append((tf.clip_by_value(grad, -1.0, 1.0), var))
+                self.filtered_vars.append(var.name)
+
+        if warn:
+            import warnings
+            warnings.warn("All of the above variables probably are causing problems " +
+                "in your graph. You should probably quit now and check these out. However, " +
+                "I will continue for now.")
+
+        self.apply_grads = self.optimizer_fn.apply_gradients(self.filtered_grads_and_vars)
+
+    def diagnose_grads(self, session, feed_dict):
+        grads = session.run([self.filtered_grads_and_vars,
+                             self.apply_grads], feed_dict=feed_dict)
+        for (grad, var) in zip(grads, self.filtered_vars):
+            if grad and np.any(np.isnan(grad[0])):
+                print("Looks like", var, "has a NaN gradient!")

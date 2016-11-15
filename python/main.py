@@ -1,6 +1,7 @@
 import argparse
-import datautil
+
 from dnc import DNC
+from util_data import *
 
 if __name__=="__main__":
         parser = argparse.ArgumentParser()
@@ -10,12 +11,11 @@ if __name__=="__main__":
 
         print("== Downloading data ==")
         print()
-        datautil.download_babi(args.datadir)
-        X, y = datautil.load_babi(args.datadir)
+        download_babi(args.datadir)
+        X, y = load_babi(args.datadir)
         print("== DNC ==")
         print()
         machine = DNC(X, y, summary_dir=args.summary_dir, N=11, W=10, R=1)
-        #machine = DNC(X, y, summary_dir=args.summary_dir)
         print("== Training ==")
         print()
         machine.train()

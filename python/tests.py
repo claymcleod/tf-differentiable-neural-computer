@@ -1,5 +1,6 @@
-from tf_ops import *
 import tensorflow as tf
+
+from ops_tf import *
 
 if __name__ == "__main__":
 

@@ -2,8 +2,8 @@ import tensorflow as tf
 
 from tensorflow.python.ops import rnn, rnn_cell
 
-from tf_ops import *
-from np_ops import *
+from ops_tf import *
+from ops_np import *
 from sklearn.model_selection import train_test_split
 
 class DNC(object):
@@ -54,7 +54,7 @@ class DNC(object):
         self.reset_memory_state()
         self.compile() 
         
-    def reset_memory_state(self):
+    def reset_memory_state(self, reuse=False):
         """Reset the memory state after each training iteration"""
         
         # Just for convenience
@@ -62,38 +62,39 @@ class DNC(object):
         W = self.W
         R = self.R
         
-        self.memory = self.var_factory.zeros("memory", [N, W])
-        
-        #########################
-        ## Read head variables ##
-        #########################
-        
-        self.read_keys = self.var_factory.zeros("read_keys", [R, W])
-        self.read_strengths = self.var_factory.zeros("read_strengths", [R])
-        self.free_gates = self.var_factory.zeros("free_gates", [R])
-        self.read_modes = self.var_factory.zeros("read_modes", [R, 3])
-        self.read_weightings = self.var_factory.zeros("read_weightings", [R, N])
-        
-        ##########################
-        ## Write head variables ##
-        ##########################
-        
-        self.write_key = self.var_factory.zeros("write_key", [W])
-        self.write_strength = self.var_factory.zeros("write_strength", [])
-        self.write_gate = self.var_factory.zeros("write_gate", [])
-        self.write_weighting = self.var_factory.zeros("write_weighting", [N])
-        
-        #####################
-        ## Other variables ##
-        #####################
-        
-        self.usage_vector = self.var_factory.zeros("usage_vector", [N])
-        self.write_vector = self.var_factory.zeros("write_vector", [W])
-        self.erase_vector = self.var_factory.zeros("erase_vector", [W])
-        self.allocation_gate = self.var_factory.zeros("allocation_gate", [])
-        self.precendence_weighting = self.var_factory.zeros("precendence_weighting", [N,])
-        self.linkage_matrix = self.var_factory.zeros("linkage_matrix", [N, N])
-        self.precedense = self.var_factory.zeros("precedense", [N])
+        with tf.variable_scope("memory_state", reuse=reuse):
+
+            self.memory = self.var_factory.zeros("memory", [N, W], trainable=False)
+            
+            #########################
+            ## Read head variables ##
+            #########################
+            
+            self.read_keys = self.var_factory.zeros("read_keys", [R, W], trainable=False)
+            self.read_strengths = self.var_factory.zeros("read_strengths", [R], trainable=False)
+            self.free_gates = self.var_factory.zeros("free_gates", [R], trainable=False)
+            self.read_modes = self.var_factory.zeros("read_modes", [R, 3], trainable=False)
+            self.read_weightings = self.var_factory.zeros("read_weightings", [R, N], trainable=False)
+            
+            ##########################
+            ## Write head variables ##
+            ##########################
+            
+            self.write_key = self.var_factory.zeros("write_key", [W], trainable=False)
+            self.write_strength = self.var_factory.zeros("write_strength", [], trainable=False)
+            self.write_gate = self.var_factory.zeros("write_gate", [], trainable=False)
+            self.write_weighting = self.var_factory.zeros("write_weighting", [N], trainable=False)
+            
+            #####################
+            ## Other variables ##
+            #####################
+            
+            self.usage_vector = self.var_factory.zeros("usage_vector", [N], trainable=False)
+            self.write_vector = self.var_factory.zeros("write_vector", [W], trainable=False)
+            self.erase_vector = self.var_factory.zeros("erase_vector", [W], trainable=False)
+            self.allocation_gate = self.var_factory.zeros("allocation_gate", [], trainable=False)
+            self.linkage_matrix = self.var_factory.zeros("linkage_matrix", [N, N], trainable=False)
+            self.precedense = self.var_factory.zeros("precedense", [N], trainable=False)
 
     def compile(self):
 
@@ -125,12 +126,14 @@ class DNC(object):
             self.loss_fn = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(self.pred_fn, self.input_y))
         
             # Create an optimizer.
-            self.opt_fn = tf.contrib.layers.optimize_loss(self.loss_fn,
-                                    self.global_step,
-                                    0.0001,
-                                    'Adagrad',
-                                    clip_gradients=10000.0,
-                                    summaries=tf.contrib.layers.OPTIMIZER_SUMMARIES)
+            #self.opt_fn = tf.contrib.layers.optimize_loss(self.loss_fn,
+            #                        self.global_step,
+            #                        0.00001,
+            #                        'Adagrad',
+            #                        clip_gradients=1.0,
+            #                        summaries=tf.contrib.layers.OPTIMIZER_SUMMARIES)
+            self.gradient_toolkit = GradientToolkit(tf.train.AdagradOptimizer(0.00001), self.loss_fn)
+            self.opt_fn = self.gradient_toolkit.apply_grads
                     
             # Evaluate model
             self.correct_pred_fn = tf.equal(tf.argmax(self.pred_fn, 1), tf.argmax(self.input_y, 1))
@@ -347,14 +350,16 @@ class DNC(object):
                 # Run graph #
                 #############
 
-                _, loss, summaries = self.session.run([self.opt_fn, self.loss_fn, self.summaries], feed_dict={self.input_x: batch_x, self.input_y: batch_y})
+                self.gradient_toolkit.diagnose_grads(self.session, feed_dict={self.input_x: batch_x, self.input_y: batch_y})
+                loss = self.session.run(self.loss_fn, feed_dict={self.input_x: batch_x, self.input_y: batch_y})
+                #[_, loss, summaries] = self.session.run([self.opt_fn, self.loss_fn, self.summaries], feed_dict={self.input_x: batch_x, self.input_y: batch_y})
 
                 ############
                 # Printing #
                 ############
 
-                if self.summary_dir:
-                    self.summary_writer.add_summary(summaries, i)
+                #if self.summary_dir:
+                #    self.summary_writer.add_summary(summaries, i)
                 percent = (i/self.n_train_instances)
 
                 #progress_bar = "["+'='*np.floor(percent*40.0)+'>'+' '*(40.0-np.floor(percent*40.0))+"]"
@@ -363,7 +368,7 @@ class DNC(object):
                     i, self.n_train_instances, percent*100.0, loss), end="")
                 i += self.batch_size
 
-                self.reset_memory_state()
+                self.reset_memory_state(reuse=True)
 
             ##############################
             # Assess at the end of batch #
