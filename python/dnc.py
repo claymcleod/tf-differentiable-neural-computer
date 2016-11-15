@@ -125,14 +125,7 @@ class DNC(object):
             self.pred_fn = tf.matmul(output, weights) + biases
             self.loss_fn = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(self.pred_fn, self.input_y))
         
-            # Create an optimizer.
-            #self.opt_fn = tf.contrib.layers.optimize_loss(self.loss_fn,
-            #                        self.global_step,
-            #                        0.00001,
-            #                        'Adagrad',
-            #                        clip_gradients=1.0,
-            #                        summaries=tf.contrib.layers.OPTIMIZER_SUMMARIES)
-            self.gradient_toolkit = GradientToolkit(tf.train.AdagradOptimizer(0.00001), self.loss_fn)
+            self.gradient_toolkit = GradientToolkit(tf.train.AdagradOptimizer(0.01), self.loss_fn)
             self.opt_fn = self.gradient_toolkit.apply_grads
                     
             # Evaluate model
