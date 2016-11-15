@@ -2,18 +2,54 @@ import numpy as np
 import tensorflow as tf
 
 def sigmoid(x):
+    """Sigmoid function to gate functions between [-1.0, 1.0].
+
+    Args:
+        x (tf.Tensor): input to gate.
+
+    Returns:
+       tf.Tensor: sigmoid transformed tensor. 
+    """
     return 1 / (1 + tf.exp(-x))
 
 def one_plus(x):
+    """One plus function to gate between [1, infinity).
+
+    Args:
+        x (tf.Tensor): input to gate.
+
+    Returns:
+       tf.Tensor: one_plus transformed tensor. 
+    """
+
     return 1 + tf.log(1 + tf.exp(x))
     
 def softmax(x):
+    """Softmax that normalizes the output to sum to 1.
+
+    Args:
+        x (tf.Tensor): input to gate.
+
+    Returns:
+       tf.Tensor: softmax transformed tensor. 
+    """
+
     e_x = tf.exp(x - tf.reduce_max(x, reduction_indices=[0]))
     return e_x / tf.reduce_sum(e_x)
 
 def cosine_similarity(a, b):
-    r = tf.reduce_sum(tf.mul(a, b)) / (tf.sqrt(tf.reduce_sum(tf.square(a))) * tf.sqrt(tf.reduce_sum(tf.square(b))) + 1e-6)
-    return r
+    """Similarity function which returns 1 when
+    a == b and 0 when a is completely oppose b.
+
+    Args:
+        a (tf.Tensor): input vector.
+        b (tf.Tensor): input vector.
+
+    Returns:
+       tf.Tensor: cosine similarity transformed tensor. 
+    """
+
+    return tf.reduce_sum(tf.mul(a, b)) / (tf.sqrt(tf.reduce_sum(tf.square(a))) * tf.sqrt(tf.reduce_sum(tf.square(b))) + 1e-6)
 
 def content_lookup(M, k, B):
     """Content lookup for a single read/write head.
@@ -42,10 +78,21 @@ def content_lookup(M, k, B):
     return tf.squeeze(r)
 
 def tf_argsort(v):
+    """Function to wrap numpy's argsort function.
+
+    Args:
+        v (tf.Tensor): tensor to sort.
+
+    Returns:
+        tf.Tensor: sorted indices of v.
+    """
+
     return tf.py_func(np.argsort, [v], [tf.int64])
 
 class VariableFactory(object):
-    
+    """Simple factory to create tensorflow variables.
+    """
+
     def __init__(self, dtype):
         self.dtype = dtype
 
@@ -60,6 +107,9 @@ class VariableFactory(object):
 
 
 class GradientToolkit(object):
+    """Toolkit to diagnose exploding or vanishing
+    gradients.
+    """
 
     def __init__(self, optimizer_fn, loss_fn):
 
