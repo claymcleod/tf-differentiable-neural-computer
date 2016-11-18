@@ -89,6 +89,11 @@ def tf_argsort(v):
 
     return tf.py_func(np.argsort, [v], [tf.int64])
 
+def summarize_var(val, name):
+    var = tf.Variable(val, name=name)
+    tf.histogram_summary(name, var)
+    return var.initialized_value()
+
 class VariableFactory(object):
     """Simple factory to create tensorflow variables.
     """
@@ -97,7 +102,7 @@ class VariableFactory(object):
         self.dtype = dtype
 
     def zeros(self, name, shape, **kwargs):
-        return tf.get_variable(name, shape=shape, dtype=self.dtype, initializer=tf.zeros_initializer, **kwargs)
+        return tf.get_variable(name, shape=shape, dtype=self.dtype, initializer=tf.constant_initializer(1e-6), **kwargs)
 
     def ones(self, name, shape, **kwargs):
         return tf.get_variable(name, shape=shape, dtype=self.dtype, initializer=tf.ones_initializer, **kwards)

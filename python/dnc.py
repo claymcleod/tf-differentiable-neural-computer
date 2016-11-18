@@ -32,7 +32,7 @@ class DNC(object):
         self.disable_memory = disable_memory
         self.dtype = dtype
         self.summary_dir = summary_dir
-        self.global_step = tf.Variable(0, name='global_step', trainable=False)
+        self.global_step = tf.Variable(0, name='global_step', trainable=False).initialized_value()
                 
         #######################
         # Controller settings #
@@ -49,8 +49,7 @@ class DNC(object):
         #######################
 
         self.var_factory = VariableFactory(dtype)
-        self.session = tf.Session(config=tf.ConfigProto(inter_op_parallelism_threads=1,
-                   intra_op_parallelism_threads=1))
+        self.session = tf.Session()
         self.reset_memory_state()
         self.compile() 
         
@@ -64,37 +63,37 @@ class DNC(object):
         
         with tf.variable_scope("memory_state", reuse=reuse):
 
-            self.memory = self.var_factory.zeros("memory", [N, W], trainable=False)
+            self.memory = self.var_factory.zeros("memory", [N, W])
             
             #########################
             ## Read head variables ##
             #########################
             
-            self.read_keys = self.var_factory.zeros("read_keys", [R, W], trainable=False)
-            self.read_strengths = self.var_factory.zeros("read_strengths", [R], trainable=False)
-            self.free_gates = self.var_factory.zeros("free_gates", [R], trainable=False)
-            self.read_modes = self.var_factory.zeros("read_modes", [R, 3], trainable=False)
-            self.read_weightings = self.var_factory.zeros("read_weightings", [R, N], trainable=False)
+            self.read_keys = self.var_factory.zeros("read_keys_0", [R, W])
+            self.read_strengths = self.var_factory.zeros("read_strengths_0", [R])
+            self.free_gates = self.var_factory.zeros("free_gates_0", [R])
+            self.read_modes = self.var_factory.zeros("read_modes_0", [R, 3])
+            self.read_weightings = self.var_factory.zeros("read_weightings_0", [R, N])
             
             ##########################
             ## Write head variables ##
             ##########################
             
-            self.write_key = self.var_factory.zeros("write_key", [W], trainable=False)
-            self.write_strength = self.var_factory.zeros("write_strength", [], trainable=False)
-            self.write_gate = self.var_factory.zeros("write_gate", [], trainable=False)
-            self.write_weighting = self.var_factory.zeros("write_weighting", [N], trainable=False)
+            self.write_key = self.var_factory.zeros("write_key_0", [W])
+            self.write_strength = self.var_factory.zeros("write_strength_0", [])
+            self.write_gate = self.var_factory.zeros("write_gate_0", [])
+            self.write_weighting = self.var_factory.zeros("write_weighting_0", [N])
             
             #####################
             ## Other variables ##
             #####################
             
-            self.usage_vector = self.var_factory.zeros("usage_vector", [N], trainable=False)
-            self.write_vector = self.var_factory.zeros("write_vector", [W], trainable=False)
-            self.erase_vector = self.var_factory.zeros("erase_vector", [W], trainable=False)
-            self.allocation_gate = self.var_factory.zeros("allocation_gate", [], trainable=False)
-            self.linkage_matrix = self.var_factory.zeros("linkage_matrix", [N, N], trainable=False)
-            self.precedense = self.var_factory.zeros("precedense", [N], trainable=False)
+            self.usage_vector = self.var_factory.zeros("usage_vector_0", [N])
+            self.write_vector = self.var_factory.zeros("write_vector_0", [W])
+            self.erase_vector = self.var_factory.zeros("erase_vector_0", [W])
+            self.allocation_gate = self.var_factory.zeros("allocation_gate_0", [])
+            self.linkage_matrix = self.var_factory.zeros("linkage_matrix_0", [N, N])
+            self.precedense = self.var_factory.zeros("precedense_0", [N])
 
     def compile(self):
 
@@ -110,6 +109,7 @@ class DNC(object):
             state = lstm_cell.zero_state(self.batch_size, self.dtype)
 
         reads_in = self.var_factory.zeros("reads_in_initial", [self.batch_size, self.n_read_inputs], trainable=False)
+        self.reads = [reads_in]
         for i in range(self.n_timesteps):
             print("\rCompiling timestep {}/{} ({:.2f} %)".format(i+1, self.n_timesteps,  ((i+1)/self.n_timesteps) * 100), end="")
             with tf.variable_scope("LSTM_{}".format(i)):
@@ -120,13 +120,15 @@ class DNC(object):
             else:
                 reads_in = self.get_reads(output, i)
 
+            self.reads.append(reads_in)
+
         print("\rCompiling loss, optimizer, predictions, etc...", end="")
         with tf.variable_scope("final"):
             self.pred_fn = tf.matmul(output, weights) + biases
             self.loss_fn = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(self.pred_fn, self.input_y))
         
-            self.gradient_toolkit = GradientToolkit(tf.train.AdagradOptimizer(0.01), self.loss_fn)
-            self.opt_fn = self.gradient_toolkit.apply_grads
+            #self.gradient_toolkit = GradientToolkit(tf.train.AdagradOptimizer(0.01), self.loss_fn)
+            self.opt_fn = tf.train.RMSPropOptimizer(learning_rate=0.001).minimize(self.loss_fn)#self.gradient_toolkit.apply_grads
                     
             # Evaluate model
             self.correct_pred_fn = tf.equal(tf.argmax(self.pred_fn, 1), tf.argmax(self.input_y, 1))
@@ -343,9 +345,9 @@ class DNC(object):
                 # Run graph #
                 #############
 
-                self.gradient_toolkit.diagnose_grads(self.session, feed_dict={self.input_x: batch_x, self.input_y: batch_y})
-                loss = self.session.run(self.loss_fn, feed_dict={self.input_x: batch_x, self.input_y: batch_y})
-                #[_, loss, summaries] = self.session.run([self.opt_fn, self.loss_fn, self.summaries], feed_dict={self.input_x: batch_x, self.input_y: batch_y})
+                #self.gradient_toolkit.diagnose_grads(self.session, feed_dict={self.input_x: batch_x, self.input_y: batch_y})
+                [_, loss, r_] = self.session.run([self.opt_fn, self.loss_fn, self.reads], feed_dict={self.input_x: batch_x, self.input_y: batch_y})
+                print(r_) 
 
                 ############
                 # Printing #
