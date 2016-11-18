@@ -339,7 +339,7 @@ class DNC(object):
             
         return np.array(accs).mean(), np.array(losses).mean()
 
-    def train(self, iterations=100, save_every_n_batches=20):
+    def train(self, iterations=100, save_every_n_batches=200):
         self.session.run(tf.initialize_all_variables())
 
         n_iter = 0
