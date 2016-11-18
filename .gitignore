@@ -3,3 +3,4 @@ summary/
 .ipynb_checkpoints/
 python/__pycache__
 **/*.swp
+checkpoints/*

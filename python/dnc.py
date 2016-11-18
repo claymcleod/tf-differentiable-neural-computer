@@ -1,3 +1,4 @@
+import os
 import tensorflow as tf
 
 from tensorflow.python.ops import rnn, rnn_cell
@@ -12,7 +13,7 @@ class DNC(object):
     """
     
     def __init__(self, X, y, validation_split=0.25, N=256, W=64, R=2, n_hidden=512, batch_size=1,
-                disable_memory=False, dtype=tf.float32, summary_dir=None):
+                disable_memory=False, dtype=tf.float32, summary_dir=None, checkpoint_file=None):
 
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=validation_split)
         
@@ -52,6 +53,17 @@ class DNC(object):
         self.session = tf.Session()
         self.reset_memory_state()
         self.compile() 
+        if checkpoint_file:
+            self.checkpoint_file_path = os.path.join("checkpoints", checkpoint_file)
+            self.saver = tf.train.Saver()
+            if os.path.exists(self.checkpoint_file_path):
+                print("Restoring from checkpoint!")
+                print()
+                self.saver.restore(self.session, self.checkpoint_file_path)
+            else:
+                print("No checkpoint found! Starting from scratch...")
+                print()
+            
         
     def reset_memory_state(self, reuse=False):
         """Reset the memory state after each training iteration"""
@@ -327,7 +339,7 @@ class DNC(object):
             
         return np.array(accs).mean(), np.array(losses).mean()
 
-    def train(self, iterations=100):
+    def train(self, iterations=100, save_every_n_batches=20):
         self.session.run(tf.initialize_all_variables())
 
         n_iter = 0
@@ -347,7 +359,6 @@ class DNC(object):
 
                 #self.gradient_toolkit.diagnose_grads(self.session, feed_dict={self.input_x: batch_x, self.input_y: batch_y})
                 [_, loss, r_] = self.session.run([self.opt_fn, self.loss_fn, self.reads], feed_dict={self.input_x: batch_x, self.input_y: batch_y})
-                print(r_) 
 
                 ############
                 # Printing #
@@ -364,6 +375,10 @@ class DNC(object):
                 i += self.batch_size
 
                 self.reset_memory_state(reuse=True)
+                if i % save_every_n_batches == 0 and hasattr(self, "checkpoint_file_path"):
+                    self.saver.save(self.session, self.checkpoint_file_path)
+                    print("Saving checkpoint")
+                
 
             ##############################
             # Assess at the end of batch #

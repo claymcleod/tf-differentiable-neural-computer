@@ -5,4 +5,4 @@ test:
 	python python/tests.py
 
 clean:
-	rm -rf `pwd`/data `pwd`/summary
+	rm -rf `pwd`/data `pwd`/summary `pwd`/checkpoints
