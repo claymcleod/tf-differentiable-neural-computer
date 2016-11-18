@@ -13,7 +13,7 @@ if __name__=="__main__":
         print()
         download_babi(args.datadir)
         X, y = load_babi(args.datadir)
-        X = X[:, -1:, :]
+        #X = X[:, -1:, :] # for debugging
         print("== DNC ==")
         print()
         machine = DNC(X, y, summary_dir=args.summary_dir, N=11, W=10, R=1, checkpoint_file="checkpoint.cpkt")
