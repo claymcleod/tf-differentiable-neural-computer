@@ -1,4 +1,5 @@
 run:
+	@mkdir -p `pwd`/checkpoints
 	python python/main.py `pwd`/data --summary-dir `pwd`/summary
 
 test:
