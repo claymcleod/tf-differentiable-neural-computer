@@ -1,6 +1,7 @@
 import os
 import re
 import glob
+import json
 import nltk
 import pickle
 import numpy as np
@@ -106,3 +107,15 @@ def load_babi(data_dir, lesson=1, use_cached=True, validation_split=0.25):
         print()
 
         return X_train, X_test, y_train, y_test
+
+def write_dnc_json(data_dir, read_keys, write_keys, allocation_gates,
+                    free_gates, write_gates, filename="summary.json",):
+    summary_path = os.path.join(data_dir, filename)
+    with open(summary_path, 'w') as fp:
+        json.dump({
+            'read_keys': read_keys,
+            'write_keys': write_keys,
+            'allocation_gates': allocation_gates,
+            'free_gates': free_gates,
+            'write_gates': write_gates
+        }, fp, indent=4, sort_keys=True)

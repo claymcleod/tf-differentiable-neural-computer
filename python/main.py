@@ -13,12 +13,12 @@ if __name__=="__main__":
         print()
         download_babi(args.datadir)
         X_train, X_test, y_train, y_test = load_babi(args.datadir, lesson=1)
-        #X_train = X_train[:, -1:, :] # for debugging
-        #X_test = X_test[:, -1:, :] # for debugging
+        #X_train = X_train[:, -2:, :] # for debugging
+        #X_test = X_test[:, -2:, :] # for debugging
         print("== DNC ==")
         print()
         machine = DNC(X_train, y_train, X_test, y_test,
-                        summary_dir=args.summary_dir, N=30, W=30, R=1,
+                        summary_dir=args.summary_dir, N=18, W=2, R=1,
                         checkpoint_file="checkpoint.cpkt")
         print("== Training ==")
         print()

@@ -6,6 +6,7 @@ from tensorflow.contrib.layers.python.layers.optimizers import optimize_loss, OP
 
 from ops_tf import *
 from ops_np import *
+from util_data import *
 
 class DNC(object):
     """Differential Neural Computer implementation
@@ -15,8 +16,8 @@ class DNC(object):
     def __init__(self, X_train, y_train, X_test, y_test, N=256, W=64, R=2,
                     n_hidden=512, batch_size=1, disable_memory=False,
                     dtype=tf.float32, summary_dir=None, checkpoint_file=None,
-                    optimizer="RMSProp", learning_rate=0.01,
-                    clip_gradients=2.0):
+                    optimizer="RMSProp", learning_rate=0.001,
+                    clip_gradients=2.0, data_dir="./data"):
 
         ################
         # DNC settings #
@@ -37,6 +38,7 @@ class DNC(object):
         self.optimizer = optimizer
         self.learning_rate = learning_rate
         self.clip_gradients = clip_gradients
+        self.data_dir = data_dir
 
         #######################
         # Controller settings #
@@ -112,6 +114,12 @@ class DNC(object):
 
     def compile(self):
 
+        self.read_keys_list = []
+        self.write_keys_list = []
+        self.allocation_gate_list = []
+        self.free_gates_list = []
+        self.write_gate_list = []
+
         with tf.variable_scope("input"):
             self.input_x = tf.placeholder(self.dtype, [None, self.n_timesteps, self.n_env_inputs])
             self.input_y = tf.placeholder(self.dtype, [None, self.n_classes])
@@ -173,12 +181,14 @@ class DNC(object):
 
         read_keys = tf.reshape(interface_out[:,offset:R*W+offset], (R, W))
         offset += R*W
+        self.read_keys_list.append(read_keys)
 
         read_strengths = tf.reshape(one_plus(interface_out)[:,offset:R+offset], (R,))
         offset += R
 
         write_key = tf.reshape(interface_out[:,offset:W+offset], (W,))
         offset += W
+        self.write_keys_list.append(write_key)
 
         write_strength = one_plus(interface_out[:, offset:offset+1])
         offset += 1
@@ -191,12 +201,15 @@ class DNC(object):
 
         free_gates = tf.reshape(sigmoid(interface_out)[:,offset:R+offset], (R,))
         offset += R
+        self.free_gates_list.append(free_gates)
 
         allocation_gate = sigmoid(interface_out[:, offset:offset+1])
         offset += 1
+        self.allocation_gate_list.append(allocation_gate)
 
         write_gate = sigmoid(interface_out[:, offset:offset+1])
         offset += 1
+        self.write_gate_list.append(write_gate)
 
         read_modes = tf.reshape(softmax(interface_out)[:,offset:R*3+offset], (R, 3))
         offset += R*3
@@ -364,14 +377,27 @@ class DNC(object):
                 #############
 
                 #self.gradient_toolkit.diagnose_grads(self.session, feed_dict={self.input_x: batch_x, self.input_y: batch_y})
-                [_, loss, r_] = self.session.run([self.opt_fn, self.loss_fn, self.reads], feed_dict={self.input_x: batch_x, self.input_y: batch_y})
+                [_, loss, rks, wks, ags, fgs, wgs] = self.session.run([self.opt_fn,
+                                                  self.loss_fn,
+                                                  self.read_keys_list,
+                                                  self.write_keys_list,
+                                                  self.allocation_gate_list,
+                                                  self.free_gates_list,
+                                                  self.write_gate_list], feed_dict={self.input_x: batch_x, self.input_y: batch_y})
+
+                rks = [e.tolist() for e in rks]
+                wks = [e.tolist() for e in wks]
+                ags = [e.tolist() for e in ags]
+                fgs = [e.tolist() for e in fgs]
+                wgs = [e.tolist() for e in wgs]
+                write_dnc_json(self.data_dir, rks, wks, ags, fgs, wgs)
 
                 ############
                 # Printing #
                 ############
 
-                #if self.summary_dir:
-                #    self.summary_writer.add_summary(summaries, i)
+                if self.summary_dir:
+                    self.summary_writer.add_summary(summaries, i)
                 percent = (i/self.n_train_instances)
 
                 #progress_bar = "["+'='*np.floor(percent*40.0)+'>'+' '*(40.0-np.floor(percent*40.0))+"]"
