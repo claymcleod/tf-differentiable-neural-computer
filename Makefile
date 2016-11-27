@@ -1,6 +1,6 @@
 run:
 	@mkdir -p `pwd`/checkpoints
-	python python/main.py `pwd`/data --summary-dir `pwd`/summary
+	python python/main.py copy `pwd`/data --summary-dir `pwd`/summary
 
 test:
 	python python/tests.py

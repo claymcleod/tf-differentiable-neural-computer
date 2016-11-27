@@ -4,6 +4,8 @@ import glob
 import json
 import nltk
 import pickle
+import string
+import random
 import numpy as np
 from sklearn import preprocessing
 from sklearn.model_selection import train_test_split
@@ -107,6 +109,34 @@ def load_babi(data_dir, lesson=1, use_cached=True, validation_split=0.25):
         print()
 
         return X_train, X_test, y_train, y_test
+
+def make_copy_dataset(data_dir, instances=1000, seq_len=3, validation_split=0.25,
+                        use_cached=True):
+
+    copy_cached_path = os.path.join(data_dir, "copy.pkl")
+    if use_cached and os.path.exists(copy_cached_path):
+        print("  [*] Loading from cached data...")
+        (X_train, X_test, y_train, y_test) = pickle.load(open(copy_cached_path, 'rb'))
+    else:
+        X, y = [], []
+        for i in range(instances):
+            input = np.zeros((seq_len, 26)) # sequence x letter
+            for j in range(seq_len):
+                input[j][random.randint(0, 25)] = 1.0
+
+            X.append(input)
+            y.append(input)
+
+        X = np.array(X)
+        y = np.array(y)
+
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=validation_split)
+        if use_cached:
+            print("  [*] Caching data")
+            pickle.dump((X_train, X_test, y_train, y_test), open(copy_cached_path, 'wb'))
+
+    print()
+    return X_train, X_test, y_train, y_test
 
 def write_dnc_json(data_dir, read_keys, write_keys, allocation_gates,
                     free_gates, write_gates, filename="summary.json",):

@@ -15,9 +15,9 @@ class DNC(object):
 
     def __init__(self, X_train, y_train, X_test, y_test, N=256, W=64, R=2,
                     n_hidden=512, batch_size=1, disable_memory=False,
-                    dtype=tf.float32, summary_dir=None, checkpoint_file=None,
-                    optimizer="RMSProp", learning_rate=0.001,
-                    clip_gradients=2.0, data_dir="./data"):
+                    summary_dir=None, checkpoint_file=None,
+                    optimizer="Adagrad", learning_rate=0.001,
+                    clip_gradients=10.0, data_dir="./data"):
 
         ################
         # DNC settings #
@@ -33,7 +33,6 @@ class DNC(object):
         self.n_hidden = n_hidden
         self.batch_size = batch_size
         self.disable_memory = disable_memory
-        self.dtype = dtype
         self.summary_dir = summary_dir
         self.optimizer = optimizer
         self.learning_rate = learning_rate
@@ -46,7 +45,7 @@ class DNC(object):
 
         (self.n_train_instances, self.n_timesteps, self.n_env_inputs) = self.X_train.shape
         (self.n_test_instances, _, _) = self.X_test.shape
-        (_, self.n_classes) = self.y_train.shape
+        (_, self.seq_output_len, self.n_classes) = self.y_train.shape
         self.n_read_inputs = self.W*self.R
         self.n_interface_outputs = (self.W*self.R) + 3*self.W + 5*self.R + 3
 
@@ -54,9 +53,7 @@ class DNC(object):
         # Tensorflow settings #
         #######################
 
-        self.var_factory = VariableFactory(dtype)
         self.session = tf.Session()
-        self.reset_memory_state()
         self.compile()
         if checkpoint_file:
             self.checkpoint_file_path = os.path.join("checkpoints", checkpoint_file)
@@ -69,49 +66,6 @@ class DNC(object):
                 print("No checkpoint found! Starting from scratch...")
                 print()
 
-
-    def reset_memory_state(self, reuse=False):
-        """Reset the memory state after each training iteration"""
-
-        # Just for convenience
-        N = self.N
-        W = self.W
-        R = self.R
-
-        with tf.variable_scope("memory_state", reuse=reuse):
-
-            self.memory = self.var_factory.zeros("memory", [N, W])
-
-            #########################
-            ## Read head variables ##
-            #########################
-
-            self.read_keys = self.var_factory.zeros("read_keys_0", [R, W])
-            self.read_strengths = self.var_factory.zeros("read_strengths_0", [R])
-            self.free_gates = self.var_factory.zeros("free_gates_0", [R])
-            self.read_modes = self.var_factory.zeros("read_modes_0", [R, 3])
-            self.read_weightings = self.var_factory.zeros("read_weightings_0", [R, N])
-
-            ##########################
-            ## Write head variables ##
-            ##########################
-
-            self.write_key = self.var_factory.zeros("write_key_0", [W])
-            self.write_strength = self.var_factory.zeros("write_strength_0", [])
-            self.write_gate = self.var_factory.zeros("write_gate_0", [])
-            self.write_weighting = self.var_factory.zeros("write_weighting_0", [N])
-
-            #####################
-            ## Other variables ##
-            #####################
-
-            self.usage_vector = self.var_factory.zeros("usage_vector_0", [N])
-            self.write_vector = self.var_factory.zeros("write_vector_0", [W])
-            self.erase_vector = self.var_factory.zeros("erase_vector_0", [W])
-            self.allocation_gate = self.var_factory.zeros("allocation_gate_0", [])
-            self.linkage_matrix = self.var_factory.zeros("linkage_matrix_0", [N, N])
-            self.precedense = self.var_factory.zeros("precedense_0", [N])
-
     def compile(self):
 
         self.read_keys_list = []
@@ -119,47 +73,98 @@ class DNC(object):
         self.allocation_gate_list = []
         self.free_gates_list = []
         self.write_gate_list = []
+        self.preds = []
+        self.losses = []
+        self.accuracies = []
+
+        # For convenience
+        N = self.N
+        W = self.W
+        R = self.R
 
         with tf.variable_scope("input"):
-            self.input_x = tf.placeholder(self.dtype, [None, self.n_timesteps, self.n_env_inputs])
-            self.input_y = tf.placeholder(self.dtype, [None, self.n_classes])
+            self.input_x = tf.placeholder(tf.float32, [self.batch_size, self.n_timesteps, self.n_env_inputs])
+            self.input_y = tf.placeholder(tf.float32, [self.batch_size, self.seq_output_len, self.n_classes])
 
-        with tf.variable_scope("lstm"):
-            weights = self.var_factory.random("lstm_weights", [self.n_hidden, self.n_classes])
-            biases = self.var_factory.zeros("lstm_biases", [self.n_classes])
+        self.memory = tf.fill([N, W], 1e-6, name="memory")
 
-            lstm_cell = rnn_cell.BasicLSTMCell(self.n_hidden, forget_bias=1.0, state_is_tuple=True)
-            state = lstm_cell.zero_state(self.batch_size, self.dtype)
+        #########################
+        ## Read head variables ##
+        #########################
 
-        reads_in = self.var_factory.zeros("reads_in_initial", [self.batch_size, self.n_read_inputs], trainable=False)
+        self.read_keys = tf.fill([R, W], 1e-6, name="read_keys_0")
+        self.read_strengths = tf.fill([R], 1e-6, name="read_strengths_0")
+        self.free_gates = tf.fill([R], 1e-6, name="free_gates_0")
+        self.read_modes = tf.fill([R, 3], 1e-6, name="read_modes_0", )
+        self.read_weightings = tf.fill([R, N], 1e-6, "read_weightings_0")
+
+        ##########################
+        ## Write head variables ##
+        ##########################
+
+        self.write_key = tf.fill([W], 1e-6, name="write_key_0")
+        self.write_strength = tf.fill([], 1e-6, name="write_strength_0")
+        self.write_gate = tf.fill([], 1e-6, name="write_gate_0")
+        self.write_weighting = tf.fill([N], 1e-6, name="write_weighting_0")
+
+        #####################
+        ## Other variables ##
+        #####################
+
+        self.usage_vector = tf.fill([N], 1e-6, name="usage_vector_0")
+        self.write_vector = tf.fill([W], 1e-6, name="write_vector_0")
+        self.erase_vector = tf.fill([W], 1e-6, name="erase_vector_0")
+        self.allocation_gate = tf.fill([], 1e-6, name="allocation_gate_0")
+        self.linkage_matrix = tf.fill([N, N], 1e-6, name="linkage_matrix_0")
+        self.precedense = tf.fill([N], 1e-6, name="precedense_0")
+
+        lstm_cell = rnn_cell.BasicLSTMCell(self.n_hidden, forget_bias=1.0, state_is_tuple=True)
+        state = lstm_cell.zero_state(self.batch_size, tf.float32)
+
+        reads_in = tf.fill([self.batch_size, self.n_read_inputs], 1e-6, name="reads_in_initial")
         self.reads = [reads_in]
         for i in range(self.n_timesteps):
             print("\rCompiling timestep {}/{} ({:.2f} %)".format(i+1, self.n_timesteps,  ((i+1)/self.n_timesteps) * 100), end="")
-            with tf.variable_scope("LSTM_{}".format(i)):
-                input_ = tf.concat(1, [self.input_x[:,i,:], tf.expand_dims(tf.reshape(reads_in, [-1]), 0)])
+            with tf.variable_scope("timestep_{}".format(i)):
+                reads_in_flat = tf.reshape(reads_in, [-1])
+                reads_in_transformed = tf.expand_dims(reads_in_flat, 0)
+                input_ = tf.concat(1, [self.input_x[:,i,:], reads_in_transformed])
                 output, state = lstm_cell(input_, state)
             if self.disable_memory:
-                reads_in = self.var_factory.zeros("reads_in_{}".format(i), [self.batch_size, self.n_read_inputs], trainable=False)
+                reads_in = tf.fill([self.batch_size, self.n_read_inputs], 1e-6, name="reads_in_{}".format(i))
             else:
-                reads_in = self.get_reads(output, i)
+                if i != self.n_timesteps-1:
+                    weights = tf.Variable(xavier_fill([self.n_hidden, self.n_interface_outputs]), name="interface_w_{}".format(i))
+                    biases = tf.Variable(tf.fill([self.n_interface_outputs], 1e-6), name="interface_b_{}".format(i))
+                    interface_out_t = tf.matmul(output, weights) + biases
+                    reads_in = self.get_reads(interface_out_t, i)
 
+            summarize_var(reads_in, name="reads_{}".format(i))
             self.reads.append(reads_in)
 
         print("\rCompiling loss, optimizer, predictions, etc...", end="")
         with tf.variable_scope("final"):
-            self.pred_fn = tf.matmul(output, weights) + biases
-            self.loss_fn = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(self.pred_fn, self.input_y))
+            for i in range(self.seq_output_len):
+                weights = tf.Variable(xavier_fill([self.n_hidden, self.n_classes]), name="lstm_w_{}".format(i))
+                biases = tf.Variable(tf.fill([self.n_classes], 1e-6), name="lstm_b_{}".format(i))
+                pred_t = tf.matmul(output, weights) + biases
+                self.preds.append(pred_t)
+                loss_t = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(pred_t, self.input_y[:, i]))
+                self.losses.append(loss_t)
+                accuracy_t = tf.cast(tf.equal(tf.argmax(pred_t, 1), tf.argmax(self.input_y[:, i], 1)), tf.float32)
+                self.accuracies.append(accuracy_t)
 
-            #self.gradient_toolkit = GradientToolkit(tf.train.AdagradOptimizer(0.01), self.loss_fn)
+            self.loss_fn = tf.reduce_sum(self.losses)
             self.opt_fn = optimize_loss(self.loss_fn, None,
                                 self.learning_rate, self.optimizer,
                                 clip_gradients=self.clip_gradients,
                                 summaries=OPTIMIZER_SUMMARIES)
 
             # Evaluate model
-            self.correct_pred_fn = tf.equal(tf.argmax(self.pred_fn, 1), tf.argmax(self.input_y, 1))
-            self.accuracy_fn = tf.reduce_mean(tf.cast(self.correct_pred_fn, self.dtype))
+            self.accuracy_fn = tf.reduce_mean(self.accuracies)
             if self.summary_dir:
+                if os.path.exists(self.summary_dir):
+                    os.system("rm -rf {0} && mkdir -p {0}".format(self.summary_dir))
                 self.summaries = tf.merge_all_summaries()
                 self.summary_writer = tf.train.SummaryWriter(self.summary_dir, self.session.graph)
             else:
@@ -168,7 +173,7 @@ class DNC(object):
         print("\rFinished compiling.                                 ")
         print()
 
-    def parse_interface(self, interface_out):
+    def parse_interface(self, interface_out, i):
 
         offset = 0
 
@@ -180,38 +185,48 @@ class DNC(object):
         result = {}
 
         read_keys = tf.reshape(interface_out[:,offset:R*W+offset], (R, W))
+        summarize_var(read_keys, "read_keys_{}".format(i+1))
         offset += R*W
         self.read_keys_list.append(read_keys)
 
         read_strengths = tf.reshape(one_plus(interface_out)[:,offset:R+offset], (R,))
+        summarize_var(read_strengths, "read_strengths_{}".format(i+1))
         offset += R
 
         write_key = tf.reshape(interface_out[:,offset:W+offset], (W,))
+        summarize_var(write_key, "write_key_{}".format(i+1))
         offset += W
         self.write_keys_list.append(write_key)
 
         write_strength = one_plus(interface_out[:, offset:offset+1])
+        summarize_var(write_strength, "write_strength_{}".format(i+1))
         offset += 1
 
         erase_vector = tf.reshape(sigmoid(interface_out)[:,offset:W+offset], (W,))
+        summarize_var(erase_vector, "erase_vector_{}".format(i+1))
         offset += W
 
         write_vector = tf.reshape(interface_out[:,offset:W+offset], (W,))
+        summarize_var(write_vector, "write_vector_{}".format(i+1))
         offset += W
 
         free_gates = tf.reshape(sigmoid(interface_out)[:,offset:R+offset], (R,))
+        summarize_var(free_gates, "free_gates_{}".format(i+1))
         offset += R
         self.free_gates_list.append(free_gates)
 
         allocation_gate = sigmoid(interface_out[:, offset:offset+1])
+        summarize_var(allocation_gate, "allocation_gate_{}".format(i+1))
         offset += 1
         self.allocation_gate_list.append(allocation_gate)
 
         write_gate = sigmoid(interface_out[:, offset:offset+1])
+        summarize_var(write_gate, "write_gate_{}".format(i+1))
         offset += 1
         self.write_gate_list.append(write_gate)
 
         read_modes = tf.reshape(softmax(interface_out)[:,offset:R*3+offset], (R, 3))
+        summarize_var(read_modes, "read_modes_{}".format(i+1))
         offset += R*3
 
         return read_keys, read_strengths, write_key, write_strength, \
@@ -229,7 +244,7 @@ class DNC(object):
             with tf.variable_scope("parse_reads"):
                 read_keys, read_strengths, write_key, write_strength, \
                 erase_vector, write_vector, free_gates, allocation_gate, \
-                write_gate, read_modes = self.parse_interface(interface_out)
+                write_gate, read_modes = self.parse_interface(interface_out, i)
 
 
             ###################
@@ -275,11 +290,7 @@ class DNC(object):
 
                 # (3) get allocation weightings
                 with tf.variable_scope("allocation_weightings"):
-                    if self.dtype == tf.float32:
-                        phi = tf.cast(tf_argsort(self.usage_vector)[0], tf.int32)
-                    else:
-                        phi = tf.cast(tf_argsort(self.usage_vector)[0], tf.int64)
-
+                    phi = tf.cast(tf_argsort(self.usage_vector)[0], tf.int32)
                     allocation_vector_list = []
                     for j in range(self.N):
                         part1 = (1 - tf.slice(self.usage_vector, [phi[j]], [1]))
@@ -289,7 +300,7 @@ class DNC(object):
                             others.append(var)
 
                         if len(others) == 0:
-                            part2 = tf.constant(0, dtype=self.dtype)
+                            part2 = tf.constant(0, dtype=tf.float32)
                         else:
                             part2 = tf.pack(tf.squeeze(others))
                         part3 = tf.reduce_prod(part2)
@@ -358,8 +369,11 @@ class DNC(object):
 
         return np.array(accs).mean(), np.array(losses).mean()
 
-    def train(self, iterations=100, save_every_n_batches=200):
+    def train(self, iterations=100, save_every_n_batches=750):
         self.session.run(tf.initialize_all_variables())
+        print("== Trainable vars ==")
+        for var in tf.trainable_variables():
+            print(var.name)
 
         n_iter = 0
 
@@ -377,14 +391,15 @@ class DNC(object):
                 #############
 
                 #self.gradient_toolkit.diagnose_grads(self.session, feed_dict={self.input_x: batch_x, self.input_y: batch_y})
-                [_, loss, rks, wks, ags, fgs, wgs] = self.session.run([self.opt_fn,
+                [_, loss, rks, wks, ags, fgs, wgs, summaries, reads] = self.session.run([self.opt_fn,
                                                   self.loss_fn,
                                                   self.read_keys_list,
                                                   self.write_keys_list,
                                                   self.allocation_gate_list,
                                                   self.free_gates_list,
-                                                  self.write_gate_list], feed_dict={self.input_x: batch_x, self.input_y: batch_y})
-
+                                                  self.write_gate_list,
+                                                  self.summaries,
+                                                  self.reads], feed_dict={self.input_x: batch_x, self.input_y: batch_y})
                 rks = [e.tolist() for e in rks]
                 wks = [e.tolist() for e in wks]
                 ags = [e.tolist() for e in ags]
@@ -398,6 +413,7 @@ class DNC(object):
 
                 if self.summary_dir:
                     self.summary_writer.add_summary(summaries, i)
+                    self.summary_writer.flush()
                 percent = (i/self.n_train_instances)
 
                 #progress_bar = "["+'='*np.floor(percent*40.0)+'>'+' '*(40.0-np.floor(percent*40.0))+"]"
@@ -406,15 +422,14 @@ class DNC(object):
                     i, self.n_train_instances, percent*100.0, loss), end="")
                 i += self.batch_size
 
-                self.reset_memory_state(reuse=True)
+                #self.reset_memory_state(reuse=True)
                 if i % save_every_n_batches == 0 and hasattr(self, "checkpoint_file_path"):
                     self.saver.save(self.session, self.checkpoint_file_path)
-                    print("Saving checkpoint")
 
 
-            ##############################
-            # Assess at the end of batch #
-            ##############################
+            ##################################
+            # Assess at the end of iteration #
+            ##################################
 
             acc, loss = self.assess()
             print("\rIteration {}: Test Loss={:.6f}, Test Accuracy={:.5f}".format(n_iter+1, loss, acc))
