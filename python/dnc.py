@@ -1,7 +1,7 @@
 import os
 import tensorflow as tf
 
-from tensorflow.python.ops import rnn, rnn_cell
+from tensorflow.contrib import rnn
 from tensorflow.contrib.layers.python.layers.optimizers import optimize_loss, OPTIMIZER_SUMMARIES
 
 from ops_tf import *
@@ -118,7 +118,7 @@ class DNC(object):
         self.linkage_matrix = tf.fill([N, N], 1e-6, name="linkage_matrix_0")
         self.precedense = tf.fill([N], 1e-6, name="precedense_0")
 
-        lstm_cell = rnn_cell.BasicLSTMCell(self.n_hidden, forget_bias=1.0, state_is_tuple=True)
+        lstm_cell = rnn.BasicLSTMCell(self.n_hidden, forget_bias=1.0, state_is_tuple=True)
         state = lstm_cell.zero_state(self.batch_size, tf.float32)
 
         reads_in = tf.fill([self.batch_size, self.n_read_inputs], 1e-6, name="reads_in_initial")
@@ -128,7 +128,7 @@ class DNC(object):
             with tf.variable_scope("timestep_{}".format(i)):
                 reads_in_flat = tf.reshape(reads_in, [-1])
                 reads_in_transformed = tf.expand_dims(reads_in_flat, 0)
-                input_ = tf.concat(1, [self.input_x[:,i,:], reads_in_transformed])
+                input_ = tf.concat([self.input_x[:,i,:], reads_in_transformed], 1)
                 output, state = lstm_cell(input_, state)
             if self.disable_memory:
                 reads_in = tf.fill([self.batch_size, self.n_read_inputs], 1e-6, name="reads_in_{}".format(i))
@@ -149,7 +149,7 @@ class DNC(object):
                 biases = tf.Variable(tf.fill([self.n_classes], 1e-6), name="lstm_b_{}".format(i))
                 pred_t = tf.matmul(output, weights) + biases
                 self.preds.append(pred_t)
-                loss_t = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(pred_t, self.input_y[:, i]))
+                loss_t = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=pred_t, labels=self.input_y[:, i]))
                 self.losses.append(loss_t)
                 accuracy_t = tf.cast(tf.equal(tf.argmax(pred_t, 1), tf.argmax(self.input_y[:, i], 1)), tf.float32)
                 self.accuracies.append(accuracy_t)
@@ -165,8 +165,8 @@ class DNC(object):
             if self.summary_dir:
                 if os.path.exists(self.summary_dir):
                     os.system("rm -rf {0} && mkdir -p {0}".format(self.summary_dir))
-                self.summaries = tf.merge_all_summaries()
-                self.summary_writer = tf.train.SummaryWriter(self.summary_dir, self.session.graph)
+                self.summaries = tf.summary.merge_all()
+                self.summary_writer = tf.summary.FileWriter(self.summary_dir, self.session.graph)
             else:
                 self.summaries = None
 
@@ -252,8 +252,8 @@ class DNC(object):
             ###################
 
             with tf.variable_scope("content_lookup"):
-                read_content_lookups = tf.pack([content_lookup(self.memory, K, b) for (K, b) in zip(tf.unpack(read_keys),
-                                                                                                    tf.unpack(read_strengths))])
+                read_content_lookups = tf.stack([content_lookup(self.memory, K, b) for (K, b) in zip(tf.unstack(read_keys),
+                                                                                                    tf.unstack(read_strengths))])
 
                 write_content_lookup = content_lookup(self.memory, write_key, write_strength)
 
@@ -263,14 +263,14 @@ class DNC(object):
 
             with tf.variable_scope("read_weighting"):
                 results = []
-                for (r_w, c_t, pi) in zip(tf.unpack(self.read_weightings),
-                                          tf.unpack(read_content_lookups),
-                                          tf.unpack(read_modes)):
+                for (r_w, c_t, pi) in zip(tf.unstack(self.read_weightings),
+                                          tf.unstack(read_content_lookups),
+                                          tf.unstack(read_modes)):
                     f_t = tf.reduce_sum(self.linkage_matrix * r_w, reduction_indices=[0])
                     b_t = tf.reduce_sum(tf.transpose(self.linkage_matrix) * r_w, reduction_indices=[0])
                     results.append(pi[0]*b_t + pi[1]*c_t + pi[2]*f_t)
 
-                self.read_weightings = tf.pack(results)
+                self.read_weightings = tf.stack(results)
 
             ##########################
             # Update write weighting #
@@ -280,13 +280,13 @@ class DNC(object):
 
                 # (1) get retention vector
                 with tf.variable_scope("retention_vector"):
-                    retention_vector = tf.reduce_prod(tf.pack([1-f*wr for (f, wr) in zip(tf.unpack(self.free_gates),
-                                                                                          tf.unpack(self.read_weightings))]),
+                    retention_vector = tf.reduce_prod(tf.stack([1-f*wr for (f, wr) in zip(tf.unstack(self.free_gates),
+                                                                                          tf.unstack(self.read_weightings))]),
                                                                                           reduction_indices=[0])
                 # (2) update usage vector
                 with tf.variable_scope("usage_vector"):
-                    self.usage_vector = tf.mul(self.usage_vector + self.write_weighting
-                                               - tf.mul(self.usage_vector, self.write_weighting), retention_vector)
+                    self.usage_vector = tf.multiply(self.usage_vector + self.write_weighting
+                                               - tf.multiply(self.usage_vector, self.write_weighting), retention_vector)
 
                 # (3) get allocation weightings
                 with tf.variable_scope("allocation_weightings"):
@@ -302,12 +302,12 @@ class DNC(object):
                         if len(others) == 0:
                             part2 = tf.constant(0, dtype=tf.float32)
                         else:
-                            part2 = tf.pack(tf.squeeze(others))
+                            part2 = tf.stack(tf.squeeze(others))
                         part3 = tf.reduce_prod(part2)
                         val = part1 + part3
                         allocation_vector_list.append(val)
 
-                    allocation_vector = tf.squeeze(tf.pack(allocation_vector_list))
+                    allocation_vector = tf.squeeze(tf.stack(allocation_vector_list))
 
                 # (4) update write weightings
                 wg = self.write_gate
@@ -334,7 +334,7 @@ class DNC(object):
 
                     new_linkage_matrix.append(this_row)
 
-                self.linkage_matrix = tf.squeeze(tf.pack(new_linkage_matrix))
+                self.linkage_matrix = tf.squeeze(tf.stack(new_linkage_matrix))
 
             #################
             # Update memory #
@@ -344,7 +344,7 @@ class DNC(object):
                 w_t = tf.expand_dims(self.write_weighting, 1)
                 et_T = tf.expand_dims(self.erase_vector, 0)
                 vt_T = tf.expand_dims(self.write_vector, 0)
-                self.memory = tf.mul(self.memory, tf.ones_like(self.memory) -  tf.matmul(w_t, et_T)) + tf.matmul(w_t, vt_T)
+                self.memory = tf.multiply(self.memory, tf.ones_like(self.memory) -  tf.matmul(w_t, et_T)) + tf.matmul(w_t, vt_T)
 
             ################
             # Read vectors #
@@ -352,9 +352,9 @@ class DNC(object):
 
             with tf.variable_scope("compute_read_vector"):
                 results = []
-                for read_weighting in tf.unpack(self.read_weightings):
+                for read_weighting in tf.unstack(self.read_weightings):
                     results.append(tf.transpose(self.memory) * read_weighting)
-                read_vectors = tf.squeeze(tf.pack(results))
+                read_vectors = tf.squeeze(tf.stack(results))
 
         return read_vectors
 
