@@ -49,7 +49,7 @@ def cosine_similarity(a, b):
        tf.Tensor: cosine similarity transformed tensor.
     """
 
-    return tf.reduce_sum(tf.mul(a, b)) / (tf.sqrt(tf.reduce_sum(tf.square(a))) * tf.sqrt(tf.reduce_sum(tf.square(b))) + 1e-6)
+    return tf.reduce_sum(tf.multiply(a, b)) / (tf.sqrt(tf.reduce_sum(tf.square(a))) * tf.sqrt(tf.reduce_sum(tf.square(b))) + 1e-6)
 
 def content_lookup(M, k, B):
     """Content lookup for a single read/write head.
